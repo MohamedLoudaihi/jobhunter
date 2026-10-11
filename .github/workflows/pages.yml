@@ -1,0 +1,71 @@
+name: Publish Jobhunter
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */6 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jobhunter-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Restore public job feed cache
+        uses: actions/cache/restore@v4
+        with:
+          path: public/jobs.json
+          key: jobhunter-feeds-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: jobhunter-feeds-v1-
+      - name: Refresh public job listings
+        id: refresh
+        run: npm run refresh:jobs
+      - name: Retain provider cache between deployments
+        if: ${{ always() && steps.refresh.outcome == 'success' }}
+        uses: actions/cache/save@v4
+        with:
+          path: public/jobs.json
+          key: jobhunter-feeds-v1-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Test matching and provider logic
+        run: npm test
+      - name: Build GitHub Pages site
+        run: npm run build:pages
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist-pages
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
